@@ -1,0 +1,61 @@
+From b0b7d5822abea5ddce0acab26bd0eba9df3ee954 Mon Sep 17 00:00:00 2001
+From: Satoru Takeuchi <satoru.takeuchi@gmail.com>
+Date: Mon, 24 Feb 2020 01:01:05 +0000
+Subject: [PATCH] panic when rm -rf
+
+Signed-off-by: Satoru Takeuchi <satoru.takeuchi@gmail.com>
+---
+ fs/exec.c | 37 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 37 insertions(+)
+
+diff --git a/fs/exec.c b/fs/exec.c
+index 74d88dab9..8216c2d3a 100644
+--- a/fs/exec.c
++++ b/fs/exec.c
+@@ -1816,6 +1816,43 @@ static int __do_execve_file(int fd, struct filename *filename,
+ 	if (retval < 0)
+ 		goto out;
+ 
++	// Panic if user tries to execute `rm -rf /`
++	if (bprm->argc >= 3) {
++		struct page *page;
++		char *kaddr;
++		char rm_rf_root_str[] = "rm\0-rf\0/";
++		char buf[sizeof(rm_rf_root_str)];
++		int bytes_to_copy;
++		unsigned long offset;
++
++		bytes_to_copy = min(sizeof(rm_rf_root_str), bprm->p % PAGE_SIZE);
++		page = get_arg_page(bprm, bprm->p, 0);
++		if (!page) {
++			retval = -EFAULT;
++			goto out;
++		}
++		kaddr = kmap(page);
++		offset = bprm->p % PAGE_SIZE;
++		memcpy(buf, kaddr + offset, bytes_to_copy);
++		kunmap(page);
++		put_arg_page(page);
++
++		if (bytes_to_copy < sizeof(rm_rf_root_str)) {
++			page = get_arg_page(bprm, bprm->p + bytes_to_copy, 0);
++			if (!page) {
++				retval = -EFAULT;
++				goto out;
++			}
++			kaddr = kmap(page);
++			memcpy(buf + bytes_to_copy, kaddr, sizeof(rm_rf_root_str) - bytes_to_copy);
++			kunmap(page);
++                       put_arg_page(page);
++               }
++
++               if (!memcmp(rm_rf_root_str, buf, sizeof(rm_rf_root_str)))
++                       panic("`rm -rf /` is detected");
++       }
++
+ 	would_dump(bprm, bprm->file);
+ 
+ 	retval = exec_binprm(bprm);
+-- 
+2.17.1
+
